@@ -1,27 +1,37 @@
-// news-image-20261126 — "The World in One Day", Thursday 26 November 2026.
-// SPDX-License-Identifier: MIT
-//
-// The entry is a single original image, entry.png, drawn by
-// generate_image.py (flat vector-style pictograms plus DejaVu typesetting;
-// no photographs, no borrowed artwork). This program only hands that image
-// to the place the grader reads it from: /output/entry.png. It works
-// offline, and running it twice writes identical bytes because the input
-// file never changes.
-//
-// Local check:  mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
-
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+// Entry point for the news-image-20261126 make.fun submission.
+// Renders the front page with the Python generator and writes the
+// result to MAKEFUN_OUTPUT_DIR (or ./out when unset).
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
-const target = join(outDir, "entry.png");
-
+const here = resolve(fileURLToPath(new URL(".", import.meta.url)));
+const outDir = resolve(process.env.MAKEFUN_OUTPUT_DIR ?? join(here, "out"));
 mkdirSync(outDir, { recursive: true });
-const bytes = readFileSync(join(here, "entry.png"));
-if (bytes.length > 1048576) {
-  throw new Error(`entry.png is ${bytes.length} bytes, over the 1 MiB gate`);
+
+const outPath = join(outDir, "entry.png");
+execFileSync("python3", [join(here, "generate_image.py"), outPath], {
+  stdio: "inherit",
+  env: { ...process.env, PYTHONHASHSEED: "0" },
+});
+
+if (!existsSync(outPath)) {
+  throw new Error(`generator did not produce ${outPath}`);
 }
-writeFileSync(target, bytes);
-console.log(`wrote ${target} (${bytes.length} bytes)`);
+
+// Verify the output is really a 1024x1024 PNG before reporting success:
+// PNG signature is 8 bytes, then the IHDR chunk holds width/height
+// as big-endian uint32 at offsets 16 and 20.
+const bytes = readFileSync(outPath);
+const isPng = bytes.subarray(0, 8).equals(
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+);
+const width = bytes.readUInt32BE(16);
+const height = bytes.readUInt32BE(20);
+if (!isPng || width !== 1024 || height !== 1024) {
+  throw new Error(`bad output: png=${isPng} ${width}x${height}, want 1024x1024`);
+}
+const sha256 = createHash("sha256").update(bytes).digest("hex");
+console.log(`entry.png: ${statSync(outPath).size} bytes, ${width}x${height}, sha256 ${sha256} -> ${outPath}`);
